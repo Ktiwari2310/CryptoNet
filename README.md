@@ -1,15 +1,25 @@
-# SecureText — Complete File Vault with Multi-Layer Protection & Tamper Defense
+# Text File Encrypter/Decrypter CLI Tool
 
-**SecureText** is a single-file Python 3 command-line security tool designed for Cryptography & Network Security (CNS) laboratory projects and demonstrations.
+A Python 3 command-line cryptography suite for the **Cryptography & Network Security (CNS)** laboratory project:
+> **Syllabus Topic**: *"Create a command-line tool supporting custom key generation, Vernam (One-Time Pad) XOR operations, and Rail Fence transposition for text files."*
 
-It provides complete file protection:
-- **Confidentiality (Access Control)**: Only accessible with the correct password via Vernam stream cipher and PBKDF2-HMAC-SHA256 key stretching (100,000 rounds).
-- **Anti-Rainbow Table Defense**: 16-byte cryptographically secure random salt (`os.urandom(16)`) per file.
-- **Tamper Shield (Integrity & Authenticity)**: Keyed HMAC-SHA256 authentication tag + 128-bit MD5 checksum. Refuses to decrypt or leak any data if even 1 bit is altered.
-- **Forensic Protection (Zero-Leakage)**: DoD 5220.22-M 3-pass secure shredding of plaintext and in-memory terminal viewing.
+---
 
-> [!NOTE]
-> **Cryptographic Notice**: MD5 is used here for syllabus and demonstration purposes; in production SHA-256 or SHA-3 would be preferred since MD5 is vulnerable to collision attacks.
+## Features
+
+1. **Custom Key Generation (`keygen`)**:
+   - Generates cryptographically secure, truly random One-Time Pad keys of arbitrary length using the OS CSPRNG (`secrets` module).
+   - Alternatively supports deterministic password-derived keys via SHA-256 counter mode.
+2. **Vernam (One-Time Pad) XOR Operations (`encrypt` / `decrypt`)**:
+   - Implements Gilbert Vernam's cipher (1917) providing information-theoretic confusion ($C_i = P_i \oplus K_i$).
+3. **Rail Fence Transposition**:
+   - Positional diffusion layer applied after the Vernam cipher with configurable rails (default 3 rails).
+4. **Cryptographic Integrity & Tamper Detection**:
+   - 128-bit MD5 checksum computed on the original plaintext and verified during decryption.
+5. **Cryptanalysis & Frequency Analysis (`analyze`)**:
+   - Computes Shannon Entropy (0 to 8 bits/byte) and displays ASCII character frequency histograms to show how encryption eliminates statistical patterns.
+6. **One-Click Automated Presentation Demo (`demo`)**:
+   - Executes all features in sequence for teacher/examiner evaluations.
 
 ---
 
@@ -17,111 +27,87 @@ It provides complete file protection:
 
 ```
 CryptoNet/
-├── securetext.py       # Single-file CLI vault & tamper defense tool
-├── sample.txt          # Sample document ready for testing
+├── filecipher.py       # Main command-line tool
+├── sample.txt          # Sample text file ready for testing
 └── README.md           # Documentation, usage guide, and lab report notes
 ```
 
 ---
 
-## Usage Guide
+## Quick Start (Git Bash / PowerShell)
 
-### 🌟 Quickest Presentation Demo (One-Click)
-To demonstrate the complete lifecycle automatically in front of your teacher:
+Navigate to the project directory:
 ```bash
-python securetext.py demo
+cd /c/Users/KHUSHBOO/.gemini/antigravity/scratch/CryptoNet
 ```
-*Walks through Locking $\rightarrow$ Viewing $\rightarrow$ Tampering $\rightarrow$ Tamper Defense rejection automatically.*
+
+### 🌟 1-Click Lab Presentation Demo (Recommended for Teacher)
+Run the automated end-to-end presentation:
+```bash
+python filecipher.py demo
+```
 
 ---
 
 ### Step-by-Step Commands
 
-#### 1. Lock & Protect a File
-Lock any file with your secret password:
+#### 1. Generate a Custom One-Time Pad Key
+Generate a 100-byte random keyfile:
 ```bash
-python securetext.py lock sample.txt mypassword123
+python filecipher.py keygen 100 -o mykey.key
 ```
-*Output: Creates `sample.txt.vault` containing the salt, HMAC authentication tag, MD5 checksum, and Vernam ciphertext.*
 
-**Optional — Secure Shredding (`--shred`)**:
-To securely wipe the original plaintext from the hard drive so it cannot be recovered by forensic recovery tools:
+#### 2. Analyze Plaintext Before Encryption
+View character frequencies and Shannon entropy of the plaintext:
 ```bash
-python securetext.py lock sample.txt mypassword123 --shred
+python filecipher.py analyze sample.txt
 ```
+
+#### 3. Encrypt a Text File (Vernam XOR + Rail Fence)
+Encrypt using your custom keyfile:
+```bash
+python filecipher.py encrypt sample.txt --key mykey.key --rails 3
+```
+*(You can also use a password string instead of a keyfile: `--key mypassword`)*.
+- Generates `sample.txt.enc` and `sample.txt.hash`.
+
+#### 4. Analyze Ciphertext After Encryption
+See how encryption destroyed letter frequencies:
+```bash
+python filecipher.py analyze sample.txt.enc
+```
+*(Notice the entropy approaches 8.0 bits/byte and frequency histogram flattens).*
+
+#### 5. Decrypt the Text File
+```bash
+python filecipher.py decrypt sample.txt.enc --key mykey.key --rails 3
+```
+- Output:
+  `✅ VERIFIED — FILE IS UNTAMPERED & AUTHENTIC!`
+  Creates `sample.txt.decrypted`.
+
+#### 6. Simulate Tamper Attack
+Simulate an attacker altering bytes in transit:
+```bash
+python filecipher.py tamper sample.txt.enc
+```
+Now attempt decryption:
+```bash
+python filecipher.py decrypt sample.txt.enc --key mykey.key --rails 3
+```
+- Output:
+  `⚠️ WARNING — TAMPERING OR WRONG KEY DETECTED!`
 
 ---
 
-#### 2. View File in Terminal (Zero Disk Footprint)
-View the protected document in memory without writing unencrypted bytes to disk:
-```bash
-python securetext.py view sample.txt.vault mypassword123
-```
+## Theoretical Foundations for Lab Reports
 
----
+### 1. Confusion and Diffusion (Claude Shannon)
+- **Confusion (Vernam XOR)**: Obscures the relationship between the plaintext and ciphertext by bitwise XORing each byte with a key byte ($C_i = P_i \oplus K_i$).
+- **Diffusion (Rail Fence)**: Distributes the statistical structure of the plaintext across the ciphertext by rearranging byte positions along zigzag rails.
 
-#### 3. Unlock & Restore the File
-Restore the original file with your password:
-```bash
-python securetext.py unlock sample.txt.vault mypassword123
-```
-*Output: Verifies HMAC authentication tag $\rightarrow$ Decrypts ciphertext $\rightarrow$ Verifies MD5 checksum $\rightarrow$ Restores `sample.txt`.*
-
----
-
-#### 4. Test Wrong Password
-```bash
-python securetext.py unlock sample.txt.vault wrongpassword
-```
-*Output: `🚨 ACCESS DENIED: SECURITY SHIELD TRIGGERED!`*
-
----
-
-#### 5. Simulate an Attacker Tampering with the File
-Simulate an attacker modifying bytes in the protected vault:
-```bash
-python securetext.py tamper sample.txt.vault
-```
-
-Now try to unlock the file with the **correct** password:
-```bash
-python securetext.py unlock sample.txt.vault mypassword123
-```
-*Output*:
-```text
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-🚨 ACCESS DENIED: SECURITY SHIELD TRIGGERED! 🚨
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-❌ EITHER:
-   1. An INCORRECT password was entered.
-   2. OR the file was MALICIOUSLY ALTERED/TAMPERED WITH in transit or storage!
-
-🛡️ Defense Action: SecureText refuses to unlock or leak any data.
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-```
-
----
-
-## Security Architecture & Mathematical Formulations
-
-### 1. Key Derivation & Salt (PBKDF2-HMAC-SHA256)
-- **16-byte Salt**: Ensures that encrypting the same file twice with the same password produces completely different vaults, rendering precomputed Rainbow Tables useless.
-- **100,000 Rounds**: Artificially slows down brute-force and dictionary attacks.
-- **Key Expansion**:
-  $$\text{MasterKey} = \text{PBKDF2}(\text{password}, \text{salt}, 100000)$$
-  $$\text{Keystream} = \text{SHA256}(\text{Key}_{enc} \parallel 0) \parallel \text{SHA256}(\text{Key}_{enc} \parallel 1) \dots$$
-
-### 2. Vernam Stream Cipher (Bitwise XOR)
-- Information-theoretic confusion:
-  $$C_i = P_i \oplus K_i, \quad P_i = C_i \oplus K_i$$
-
-### 3. Keyed HMAC-SHA256 Authentication Tag
-- Protects against Man-in-the-Middle (MITM) ciphertext tampering:
-  $$\text{AuthTag} = \text{HMAC-SHA256}(\text{Key}_{hmac}, \text{salt} \parallel \text{ciphertext})$$
-- Even if an attacker intercepts the file, they cannot forge a valid HMAC tag without knowing the secret password.
-
-### 4. Forensic Secure Shred (DoD 5220.22-M)
-- Pass 1: Write all zeros (`0x00`)
-- Pass 2: Write all ones (`0xFF`)
-- Pass 3: Write cryptographically secure random bytes (`os.urandom`)
-- Unlink file from filesystem.
+### 2. Shannon Entropy
+Measures randomness on a scale of 0 to 8 bits/byte:
+$$H = -\sum_{i=0}^{255} p(x_i) \log_2 p(x_i)$$
+- Natural English text has an entropy of ~4.0 - 5.0 bits/byte due to language redundancy.
+- Hybrid Vernam + Rail Fence ciphertext approaches 7.9 - 8.0 bits/byte.
