@@ -1,0 +1,7 @@
+Cryptography & Network Security Lab Demonstration
+Project: SecureText — Encrypted File Vault with Integrity Verification
+Author: Khushboo Tiwari
+
+Confidential Message:
+The Vernam Cipher (One-Time Pad style) provides information-theoretic security when the key is truly random and never reused.
+MD5 hashing provides message integrity verification to detect unauthorized tampering or bit modifications.
