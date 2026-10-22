@@ -1,20 +1,15 @@
-# SecureText — Encrypted File Vault with Integrity Verification
+# SecureText — Complete File Vault with Multi-Layer Protection & Tamper Defense
 
-A single-file Python 3 command-line security tool demonstrating fundamental **Cryptography & Network Security (CNS)** concepts:
-1. **Confidentiality**: Vernam Cipher (One-Time Pad style stream cipher using bitwise XOR).
-2. **Key Derivation**: Pseudo-random keystream expansion using SHA-256 in counter mode.
-3. **Integrity Auditing**: Cryptographic verification using 128-bit MD5 hashing.
-4. **Attack Simulation**: Simulated Man-in-the-Middle (MITM) bit-flipping attack to verify tamper detection.
+**SecureText** is a single-file Python 3 command-line security tool designed for Cryptography & Network Security (CNS) laboratory projects and demonstrations.
+
+It provides complete file protection:
+- **Confidentiality (Access Control)**: Only accessible with the correct password via Vernam stream cipher and PBKDF2-HMAC-SHA256 key stretching (100,000 rounds).
+- **Anti-Rainbow Table Defense**: 16-byte cryptographically secure random salt (`os.urandom(16)`) per file.
+- **Tamper Shield (Integrity & Authenticity)**: Keyed HMAC-SHA256 authentication tag + 128-bit MD5 checksum. Refuses to decrypt or leak any data if even 1 bit is altered.
+- **Forensic Protection (Zero-Leakage)**: DoD 5220.22-M 3-pass secure shredding of plaintext and in-memory terminal viewing.
 
 > [!NOTE]
-> **Cryptographic Notice**: MD5 is used here for syllabus and academic demonstration purposes. In production systems, modern secure hash functions such as **SHA-256** or **SHA-3** must be preferred because MD5 is cryptographically broken against collision attacks.
-
----
-
-## Requirements
-
-- **Python 3.6+** (Standard Library only)
-- **Zero external dependencies** (no `pip install` required!)
+> **Cryptographic Notice**: MD5 is used here for syllabus and demonstration purposes; in production SHA-256 or SHA-3 would be preferred since MD5 is vulnerable to collision attacks.
 
 ---
 
@@ -22,102 +17,111 @@ A single-file Python 3 command-line security tool demonstrating fundamental **Cr
 
 ```
 CryptoNet/
-├── securetext.py       # Single-file CLI encryption & integrity tool
-├── sample.txt          # Sample text file ready for demonstration
-└── README.md           # Documentation and lab viva guide
+├── securetext.py       # Single-file CLI vault & tamper defense tool
+├── sample.txt          # Sample document ready for testing
+└── README.md           # Documentation, usage guide, and lab report notes
 ```
 
 ---
 
-## How to Run & Usage Examples
+## Usage Guide
 
-### 1. Encrypt a File
-Encrypt any file using a custom password:
+### 🌟 Quickest Presentation Demo (One-Click)
+To demonstrate the complete lifecycle automatically in front of your teacher:
 ```bash
-python securetext.py encrypt sample.txt mysecretpassword
+python securetext.py demo
 ```
-**What happens**:
-- Computes the MD5 integrity hash of the original plaintext.
-- Derives a keystream of identical byte length from `mysecretpassword` using SHA-256 counter mode.
-- Encrypts file bytes using Vernam bitwise XOR ($C[i] = P[i] \oplus K[i]$).
-- Creates two output files:
-  - `sample.txt.enc`: Encrypted ciphertext bytes.
-  - `sample.txt.hash`: Text file containing original MD5 hash.
-- Logs encryption time in milliseconds.
+*Walks through Locking $\rightarrow$ Viewing $\rightarrow$ Tampering $\rightarrow$ Tamper Defense rejection automatically.*
 
 ---
 
-### 2. Decrypt a File (Normal Case - Untampered)
-Decrypt the file using the original password:
+### Step-by-Step Commands
+
+#### 1. Lock & Protect a File
+Lock any file with your secret password:
 ```bash
-python securetext.py decrypt sample.txt.enc mysecretpassword
+python securetext.py lock sample.txt mypassword123
 ```
-**Output**:
+*Output: Creates `sample.txt.vault` containing the salt, HMAC authentication tag, MD5 checksum, and Vernam ciphertext.*
+
+**Optional — Secure Shredding (`--shred`)**:
+To securely wipe the original plaintext from the hard drive so it cannot be recovered by forensic recovery tools:
+```bash
+python securetext.py lock sample.txt mypassword123 --shred
+```
+
+---
+
+#### 2. View File in Terminal (Zero Disk Footprint)
+View the protected document in memory without writing unencrypted bytes to disk:
+```bash
+python securetext.py view sample.txt.vault mypassword123
+```
+
+---
+
+#### 3. Unlock & Restore the File
+Restore the original file with your password:
+```bash
+python securetext.py unlock sample.txt.vault mypassword123
+```
+*Output: Verifies HMAC authentication tag $\rightarrow$ Decrypts ciphertext $\rightarrow$ Verifies MD5 checksum $\rightarrow$ Restores `sample.txt`.*
+
+---
+
+#### 4. Test Wrong Password
+```bash
+python securetext.py unlock sample.txt.vault wrongpassword
+```
+*Output: `🚨 ACCESS DENIED: SECURITY SHIELD TRIGGERED!`*
+
+---
+
+#### 5. Simulate an Attacker Tampering with the File
+Simulate an attacker modifying bytes in the protected vault:
+```bash
+python securetext.py tamper sample.txt.vault
+```
+
+Now try to unlock the file with the **correct** password:
+```bash
+python securetext.py unlock sample.txt.vault mypassword123
+```
+*Output*:
 ```text
-✅ Verified — file is untampered
-   The file decrypted perfectly and matches the original cryptographic hash.
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+🚨 ACCESS DENIED: SECURITY SHIELD TRIGGERED! 🚨
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+❌ EITHER:
+   1. An INCORRECT password was entered.
+   2. OR the file was MALICIOUSLY ALTERED/TAMPERED WITH in transit or storage!
+
+🛡️ Defense Action: SecureText refuses to unlock or leak any data.
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 ```
-- Recreates the plaintext at `sample.txt.decrypted`.
-- Confirms the computed MD5 of the decrypted file matches the stored reference hash.
 
 ---
 
-### 3. Decrypt with Wrong Password
-Attempt to decrypt using an incorrect password:
-```bash
-python securetext.py decrypt sample.txt.enc wrongpassword
-```
-**Output**:
-```text
-⚠️ WARNING — file has been modified or wrong password used
-   Integrity verification failed! The decrypted content does NOT match the original.
-```
-- Because XOR with a wrong keystream yields scrambled gibberish, the recomputed MD5 hash diverges completely, immediately alerting the user.
+## Security Architecture & Mathematical Formulations
 
----
+### 1. Key Derivation & Salt (PBKDF2-HMAC-SHA256)
+- **16-byte Salt**: Ensures that encrypting the same file twice with the same password produces completely different vaults, rendering precomputed Rainbow Tables useless.
+- **100,000 Rounds**: Artificially slows down brute-force and dictionary attacks.
+- **Key Expansion**:
+  $$\text{MasterKey} = \text{PBKDF2}(\text{password}, \text{salt}, 100000)$$
+  $$\text{Keystream} = \text{SHA256}(\text{Key}_{enc} \parallel 0) \parallel \text{SHA256}(\text{Key}_{enc} \parallel 1) \dots$$
 
-### 4. Tamper Attack Simulation (Lab Viva Demo)
-Simulate an attacker intercepting the ciphertext and flipping random bits:
-```bash
-python securetext.py tamper sample.txt.enc
-```
-**Output**:
-```text
-⚠️ SECURETEXT — SIMULATED FILE TAMPER ATTACK
-[*] Modifying 3 byte(s) at random offsets to simulate tampering:
-    - Offset  14: 0x4a -> 0xb5 (Bitwise Inverted)
-    - Offset  88: 0x1f -> 0xe0 (Bitwise Inverted)
-    - Offset 122: 0x9c -> 0x63 (Bitwise Inverted)
-⚠️ TAMPER COMPLETE! 'sample.txt.enc' has been maliciously altered.
-```
+### 2. Vernam Stream Cipher (Bitwise XOR)
+- Information-theoretic confusion:
+  $$C_i = P_i \oplus K_i, \quad P_i = C_i \oplus K_i$$
 
-Now re-run decryption with the correct password:
-```bash
-python securetext.py decrypt sample.txt.enc mysecretpassword
-```
-**Output**:
-```text
-⚠️ WARNING — file has been modified or wrong password used
-   Integrity verification failed! The decrypted content does NOT match the original.
-```
-This visually demonstrates the fundamental principle of **Cryptographic Integrity**: any alteration in the encrypted ciphertext is immediately flagged.
+### 3. Keyed HMAC-SHA256 Authentication Tag
+- Protects against Man-in-the-Middle (MITM) ciphertext tampering:
+  $$\text{AuthTag} = \text{HMAC-SHA256}(\text{Key}_{hmac}, \text{salt} \parallel \text{ciphertext})$$
+- Even if an attacker intercepts the file, they cannot forge a valid HMAC tag without knowing the secret password.
 
----
-
-## Mathematical Foundations for Lab Reports
-
-### 1. Vernam Cipher (Bitwise XOR)
-Invented by Gilbert Vernam in 1917. Operating on individual bytes:
-$$\text{Encryption: } C_i = P_i \oplus K_i$$
-$$\text{Decryption: } P_i = C_i \oplus K_i$$
-
-Because bitwise XOR is self-inverse:
-$$(P_i \oplus K_i) \oplus K_i = P_i \oplus (K_i \oplus K_i) = P_i \oplus 0 = P_i$$
-
-### 2. SHA-256 Counter-Mode Keystream Derivation
-To prevent simple repeating key vulnerabilities (Vigenère-style periodic attacks), the password seeds an incrementing 32-bit counter hashed with SHA-256:
-$$\text{Keystream} = \text{SHA256}(P \parallel 0) \parallel \text{SHA256}(P \parallel 1) \parallel \dots$$
-Truncated to exactly the required file length $L$.
-
-### 3. MD5 Integrity Hashing
-Produces a 128-bit digest of the original file. Even a single bit change in plaintext alters roughly 50% of the hash output bits due to the **avalanche effect**, making tampering detection instantaneous.
+### 4. Forensic Secure Shred (DoD 5220.22-M)
+- Pass 1: Write all zeros (`0x00`)
+- Pass 2: Write all ones (`0xFF`)
+- Pass 3: Write cryptographically secure random bytes (`os.urandom`)
+- Unlink file from filesystem.

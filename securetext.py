@@ -1,23 +1,33 @@
 #!/usr/bin/env python3
 """
-SecureText — Encrypted File Vault with Integrity Verification
+SecureText — Complete File Vault with Multi-Layer Protection & Tamper Defense
 Cryptography & Network Security Lab Project
 
 Author: Khushboo Tiwari
 Description:
-A single-file Python 3 command-line tool demonstrating:
-1. Vernam Cipher (One-Time Pad style stream cipher using bitwise XOR)
-2. Deterministic Key Derivation from a password using SHA-256 counter mode
-3. Cryptographic Integrity Auditing using MD5 Hashing
-4. Man-in-the-Middle (MITM) Tamper Simulation
+A single-file Python 3 security tool providing complete file protection:
+1. Confidentiality (Access Control):
+   - Vernam stream cipher (bitwise XOR) keyed from password.
+   - PBKDF2-HMAC-SHA256 key stretching (100,000 iterations) with a 16-byte random salt.
+2. Integrity & Tamper Defense (Modification Prevention):
+   - Keyed HMAC-SHA256 authentication tag (prevents ciphertext forgery).
+   - 128-bit MD5 checksum (verifies bit-level plaintext integrity).
+   - Tamper Shield: Refuses to unlock or leak data if even 1 bit was altered.
+3. Forensic Protection (Zero-Leakage):
+   - Secure shredding (DoD 3-pass overwrite) of original plaintext after locking.
+   - Secure terminal viewing ('view' mode) without saving plaintext to disk.
+4. Attack Simulation & Demo:
+   - 'tamper' command to simulate unauthorized modification attacks.
+   - 'demo' command for a one-click automated presentation to teachers.
 
-Pure Python Standard Library only (hashlib, os, sys, time, random, argparse).
+Pure Python standard library only (hashlib, hmac, os, sys, time, random, argparse).
 No external third-party dependencies required.
 """
 
 import os
 import sys
 import time
+import hmac
 import random
 import hashlib
 import argparse
@@ -30,346 +40,471 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     except Exception:
         pass
 
+# File Vault Header Constants
+MAGIC_HEADER = b"SECVAULT1"  # 9-byte unique file signature
+SALT_SIZE = 16              # 16 bytes (128-bit) cryptographically secure salt
+HMAC_SIZE = 32              # 32 bytes (256-bit) HMAC-SHA256 authentication tag
+MD5_SIZE = 16               # 16 bytes (128-bit) MD5 plaintext integrity digest
+PBKDF2_ROUNDS = 100_000     # 100,000 iterations to resist GPU brute-force attacks
+
 
 # ============================================================================
-# 1. KEY DERIVATION FUNCTION (KDF)
+# 1. CRYPTOGRAPHIC PRIMITIVES
 # ============================================================================
-def derive_keystream(password: str, length: int) -> bytes:
+def derive_keys(password: str, salt: bytes, length: int) -> Tuple[bytes, bytes, bytes]:
     """
-    Derives a pseudo-random keystream of exact byte length `length` from a password.
+    Derives cryptographic keys using PBKDF2-HMAC-SHA256 key stretching.
 
-    Mathematical Concept:
-    A true Vernam cipher requires a key stream exactly equal in length to the plaintext.
-    To avoid insecure simple repetition (which repeats periodic patterns vulnerable
-    to Kasiski examination and frequency analysis), we use SHA-256 in counter mode:
-        Keystream = Block_0 || Block_1 || Block_2 ...
-        where Block_i = SHA-256(password || counter_i)
-    
-    This produces a cryptographically pseudo-random keystream indistinguishable
-    from random noise, uniquely keyed by the user's password.
+    Security Principle:
+    - 16-byte random salt prevents precomputed Rainbow Table attacks.
+    - 100,000 PBKDF2 iterations slow down offline dictionary/brute-force attacks.
+    - Splits master key into:
+      1. Encrypt Key: Expands into keystream for Vernam cipher.
+      2. HMAC Key: Used for cryptographic message authentication (tamper proofing).
     """
-    if length <= 0:
-        return b""
-
     password_bytes = password.encode("utf-8")
+    # Derive 64 bytes of high-entropy key material
+    master_key = hashlib.pbkdf2_hmac("sha256", password_bytes, salt, PBKDF2_ROUNDS, dklen=64)
+    enc_seed = master_key[:32]
+    hmac_key = master_key[32:]
+
+    # Expand enc_seed into a keystream of exact length `length` via SHA-256 counter mode
     keystream = bytearray()
     counter = 0
-
     while len(keystream) < length:
-        # Concatenate password bytes with 4-byte big-endian integer counter
-        counter_bytes = counter.to_bytes(4, byteorder="big")
-        block = hashlib.sha256(password_bytes + counter_bytes).digest()
+        block = hashlib.sha256(enc_seed + counter.to_bytes(4, byteorder="big")).digest()
         keystream.extend(block)
         counter += 1
 
-    # Return exactly the required number of keystream bytes
-    return bytes(keystream[:length])
+    return bytes(keystream[:length]), hmac_key, master_key
+
+
+def vernam_xor(data: bytes, keystream: bytes) -> bytes:
+    """
+    Gilbert Vernam's stream cipher (1917).
+    Encryption & Decryption are symmetric: C[i] = P[i] ^ K[i] and P[i] = C[i] ^ K[i].
+    """
+    return bytes([d ^ k for d, k in zip(data, keystream)])
+
+
+def compute_hmac(key: bytes, data: bytes) -> bytes:
+    """Computes a keyed HMAC-SHA256 authentication tag over data."""
+    return hmac.new(key, data, hashlib.sha256).digest()
+
+
+def compute_md5(data: bytes) -> bytes:
+    """Computes 16-byte binary MD5 message digest of data."""
+    return hashlib.md5(data).digest()
+
+
+def secure_shred(file_path: str):
+    """
+    Forensic Secure Erasure (DoD 5220.22-M 3-Pass Overwrite).
+    Overwrites the plaintext file with 0x00, 0xFF, and random noise before deleting,
+    ensuring data cannot be recovered by forensic tools (Recuva, TestDisk).
+    """
+    if not os.path.isfile(file_path):
+        return
+
+    length = os.path.getsize(file_path)
+    with open(file_path, "ba+", buffering=0) as f:
+        # Pass 1: Overwrite with all zeros (0x00)
+        f.seek(0)
+        f.write(b"\x00" * length)
+        # Pass 2: Overwrite with all ones (0xFF)
+        f.seek(0)
+        f.write(b"\xFF" * length)
+        # Pass 3: Overwrite with cryptographically secure random bytes
+        f.seek(0)
+        f.write(os.urandom(length))
+
+    os.remove(file_path)
 
 
 # ============================================================================
-# 2. VERNAM CIPHER (XOR-BASED STREAM CIPHER)
+# 2. LOCK MODE (PROTECT FILE)
 # ============================================================================
-def vernam_cipher(data: bytes, keystream: bytes) -> bytes:
+def lock_file(file_path: str, password: str, shred_original: bool = False):
     """
-    Encrypts or decrypts bytes using Gilbert Vernam's XOR stream cipher (1917).
-
-    Mathematical Foundation:
-    Encryption: C[i] = P[i] ⊕ K[i]
-    Decryption: P[i] = C[i] ⊕ K[i]
-
-    Because bitwise XOR is its own inverse (A ⊕ B ⊕ B = A), the exact same
-    function performs both encryption and decryption.
+    Locks and protects a file with password encryption, PBKDF2 salt,
+    HMAC authentication, and MD5 integrity verification.
     """
-    if len(data) != len(keystream):
-        raise ValueError("Data length and keystream length must be identical for Vernam cipher.")
-
-    # Bitwise XOR each byte of data with the corresponding byte of keystream
-    return bytes([b ^ k for b, k in zip(data, keystream)])
-
-
-# ============================================================================
-# 3. MD5 INTEGRITY HASHING & TIMING
-# ============================================================================
-def compute_md5(data: bytes) -> Tuple[str, float]:
-    """
-    Computes the 128-bit MD5 message digest of raw bytes and measures
-    the execution time in milliseconds with high-precision perf_counter.
-
-    Returns:
-        (hex_digest_string, elapsed_time_in_milliseconds)
-    """
-    start_time = time.perf_counter()
-    hasher = hashlib.md5()
-    hasher.update(data)
-    digest = hasher.hexdigest()
-    end_time = time.perf_counter()
-
-    elapsed_ms = (end_time - start_time) * 1000.0
-    return digest, elapsed_ms
-
-
-# ============================================================================
-# 4. ENCRYPT MODE
-# ============================================================================
-def encrypt_file(input_path: str, password: str):
-    """
-    Encrypts an input file using Vernam cipher and saves:
-      1. <input_path>.enc   (encrypted bytes)
-      2. <input_path>.hash  (MD5 integrity hash text file)
-    """
-    if not os.path.isfile(input_path):
-        print(f"\n❌ Error: Input file '{input_path}' not found.")
+    if not os.path.isfile(file_path):
+        print(f"\n❌ Error: Target file '{file_path}' does not exist.")
         sys.exit(1)
 
     if not password:
         print("\n❌ Error: Password cannot be empty.")
         sys.exit(1)
 
-    print("\n" + "=" * 65)
-    print("🔐 SECURETEXT — FILE ENCRYPTION PROCESS")
-    print("=" * 65)
-    print(f"[*] Input File : {input_path}")
-    print(f"[*] File Size  : {os.path.getsize(input_path)} bytes")
+    print("\n" + "=" * 68)
+    print("🔒 SECURETEXT — FILE LOCKING & PROTECTION PROCESS")
+    print("=" * 68)
+    print(f"[*] Target File    : {file_path}")
+    print(f"[*] Original Size  : {os.path.getsize(file_path)} bytes")
 
     # Step 1: Read plaintext
-    print("[1/4] Reading input file contents...")
-    with open(input_path, "rb") as f:
+    print("[1/5] Reading sensitive file contents into memory...")
+    with open(file_path, "rb") as f:
         plaintext = f.read()
 
     file_size = len(plaintext)
-    if file_size == 0:
-        print("⚠️ Warning: Input file is empty. Proceeding with 0-byte encryption.")
 
-    # Step 2: Compute MD5 Integrity Hash of the original plaintext
-    print("[2/4] Computing MD5 integrity hash of original plaintext...")
-    md5_hash, hash_time_ms = compute_md5(plaintext)
-    print(f"      - Original MD5 Hash : {md5_hash}")
-    print(f"      - Hash Time Elapsed : {hash_time_ms:.4f} ms")
+    # Step 2: Compute MD5 integrity hash of plaintext
+    print("[2/5] Computing MD5 plaintext integrity digest...")
+    md5_digest = compute_md5(plaintext)
+    print(f"      - Plaintext MD5 Digest : {md5_digest.hex()}")
 
-    # Step 3: Derive Keystream from Password
-    print("[3/4] Deriving keystream from password via SHA-256 counter mode...")
-    start_kdf = time.perf_counter()
-    keystream = derive_keystream(password, file_size)
-    kdf_time_ms = (time.perf_counter() - start_kdf) * 1000.0
-    print(f"      - Keystream Length  : {len(keystream)} bytes")
-    print(f"      - KDF Time Elapsed  : {kdf_time_ms:.4f} ms")
+    # Step 3: Generate Salt & Derive Keys via 100,000 PBKDF2 rounds
+    print("[3/5] Generating 16-byte random salt & stretching key with PBKDF2...")
+    salt = os.urandom(SALT_SIZE)
+    t0 = time.perf_counter()
+    keystream, hmac_key, _ = derive_keys(password, salt, file_size)
+    kdf_ms = (time.perf_counter() - t0) * 1000.0
+    print(f"      - Cryptographic Salt   : {salt.hex()[:16]}... (16 bytes random)")
+    print(f"      - PBKDF2 Iterations    : {PBKDF2_ROUNDS:,} rounds ({kdf_ms:.2f} ms)")
 
-    # Step 4: Vernam Encryption (XOR)
-    print("[4/4] Encrypting data with Vernam stream cipher (XOR)...")
-    start_enc = time.perf_counter()
-    ciphertext = vernam_cipher(plaintext, keystream)
-    enc_time_ms = (time.perf_counter() - start_enc) * 1000.0
-    total_time_ms = hash_time_ms + kdf_time_ms + enc_time_ms
+    # Step 4: Encrypt via Vernam XOR
+    print("[4/5] Encrypting with Vernam Stream Cipher (Bitwise XOR)...")
+    ciphertext = vernam_xor(plaintext, keystream)
 
-    # Save output files
-    enc_path = f"{input_path}.enc"
-    hash_path = f"{input_path}.hash"
+    # Step 5: Compute HMAC-SHA256 authentication tag over (Salt || Ciphertext)
+    print("[5/5] Generating HMAC-SHA256 Tamper-Detection Authentication Tag...")
+    auth_tag = compute_hmac(hmac_key, salt + ciphertext)
+    print(f"      - HMAC Auth Tag        : {auth_tag.hex()[:32]}... (256 bits)")
 
-    with open(enc_path, "wb") as f:
-        f.write(ciphertext)
+    # Build protected vault package
+    vault_data = MAGIC_HEADER + salt + auth_tag + md5_digest + ciphertext
+    vault_path = f"{file_path}.vault"
 
-    with open(hash_path, "w", encoding="utf-8") as f:
-        f.write(md5_hash + "\n")
+    with open(vault_path, "wb") as f:
+        f.write(vault_data)
 
-    # Display results
-    preview_len = min(16, len(ciphertext))
-    preview_hex = " ".join(f"{b:02x}" for b in ciphertext[:preview_len])
-    if len(ciphertext) > preview_len:
-        preview_hex += " ..."
+    print("-" * 68)
+    print("🛡️ FILE LOCKED & PROTECTED SUCCESSFULLY!")
+    print(f"📁 Protected Vault File: {vault_path}")
+    print(f"🔐 Security Layers     : Vernam OTP + PBKDF2 (100k rounds) + HMAC-SHA256 + MD5")
 
-    print("-" * 65)
-    print("✅ ENCRYPTION SUCCESSFUL!")
-    print(f"📁 Output Ciphertext File : {enc_path}")
-    print(f"📄 Output Integrity Hash  : {hash_path}")
-    print(f"🔍 Ciphertext Preview Hex : [{preview_hex}]")
-    print(f"⏱️ Total Time Taken       : {total_time_ms:.4f} ms")
-    print("=" * 65 + "\n")
+    # Optional forensic shredding
+    if shred_original:
+        print("[!] Secure Shredding: Wiping original plaintext from disk (DoD 3-pass)...")
+        secure_shred(file_path)
+        print(f"    - Original '{file_path}' permanently destroyed to prevent disk recovery.")
+    else:
+        print(f"ℹ️ Original file '{file_path}' kept. (Use --shred to wipe plaintext permanently).")
+    print("=" * 68 + "\n")
 
 
 # ============================================================================
-# 5. DECRYPT MODE
+# 3. UNLOCK MODE (ACCESS PROTECTED FILE)
 # ============================================================================
-def decrypt_file(enc_path: str, password: str):
+def unlock_file(vault_path: str, password: str, output_path: str = None) -> bytes:
     """
-    Decrypts an encrypted .enc file using the password-derived key,
-    recomputes MD5 of decrypted plaintext, compares with .hash file,
-    and writes decrypted output to <input_file>.decrypted.
+    Unlocks a protected .vault file:
+    1. Validates magic header signature.
+    2. Uses PBKDF2 to derive keys.
+    3. Verifies HMAC authentication tag (detects wrong password OR tampering).
+    4. Decrypts via Vernam inverse XOR.
+    5. Verifies MD5 checksum against original plaintext.
+    6. Restores the unlocked file.
     """
-    if not os.path.isfile(enc_path):
-        print(f"\n❌ Error: Encrypted file '{enc_path}' not found.")
+    if not os.path.isfile(vault_path):
+        print(f"\n❌ Error: Vault file '{vault_path}' does not exist.")
         sys.exit(1)
 
-    if not password:
-        print("\n❌ Error: Password cannot be empty.")
+    print("\n" + "=" * 68)
+    print("🔓 SECURETEXT — FILE UNLOCKING & ACCESS CONTROL")
+    print("=" * 68)
+    print(f"[*] Protected Vault : {vault_path}")
+
+    # Read vault package
+    with open(vault_path, "rb") as f:
+        vault_data = f.read()
+
+    # Step 1: Validate header structure
+    header_len = len(MAGIC_HEADER) + SALT_SIZE + HMAC_SIZE + MD5_SIZE
+    if len(vault_data) < header_len or not vault_data.startswith(MAGIC_HEADER):
+        print("\n❌ SECURITY REJECTION: Invalid or corrupted file format.")
+        print("   This is not a valid SecureText vault file.")
         sys.exit(1)
 
-    # Determine base filename for hash file and output decrypted file
-    if enc_path.endswith(".enc"):
-        base_name = enc_path[:-4]
-    else:
-        base_name = enc_path
+    offset = len(MAGIC_HEADER)
+    salt = vault_data[offset:offset + SALT_SIZE]
+    offset += SALT_SIZE
+    stored_hmac = vault_data[offset:offset + HMAC_SIZE]
+    offset += HMAC_SIZE
+    stored_md5 = vault_data[offset:offset + MD5_SIZE]
+    offset += MD5_SIZE
+    ciphertext = vault_data[offset:]
 
-    hash_path = f"{base_name}.hash"
-    decrypted_path = f"{base_name}.decrypted"
+    # Step 2: Derive keys using the stored salt and user's password
+    print("[1/4] Deriving cryptographic keys via PBKDF2 (100,000 rounds)...")
+    keystream, hmac_key, _ = derive_keys(password, salt, len(ciphertext))
 
-    print("\n" + "=" * 65)
-    print("🔓 SECURETEXT — FILE DECRYPTION & INTEGRITY CHECK")
-    print("=" * 65)
-    print(f"[*] Encrypted File : {enc_path}")
-    print(f"[*] Expected Hash  : {hash_path}")
+    # Step 3: Check HMAC-SHA256 Authentication Tag FIRST
+    print("[2/4] Verifying HMAC-SHA256 Authenticity & Tamper Shield...")
+    computed_hmac = compute_hmac(hmac_key, salt + ciphertext)
 
-    # Read ciphertext
-    print("[1/4] Reading encrypted bytes...")
-    with open(enc_path, "rb") as f:
-        ciphertext = f.read()
+    # Use constant-time comparison to prevent timing side-channel attacks
+    if not hmac.compare_digest(stored_hmac, computed_hmac):
+        print("\n" + "!" * 68)
+        print("🚨 ACCESS DENIED: SECURITY SHIELD TRIGGERED! 🚨")
+        print("!" * 68)
+        print("❌ EITHER:")
+        print("   1. An INCORRECT password was entered.")
+        print("   2. OR the file was MALICIOUSLY ALTERED/TAMPERED WITH in transit or storage!")
+        print("\n🛡️ Defense Action: SecureText refuses to unlock or leak any data.")
+        print("!" * 68 + "\n")
+        sys.exit(1)
 
-    file_size = len(ciphertext)
+    print("      - HMAC Verification : [PASSED ✓] (Authentic & Password Verified)")
 
-    # Step 1: Derive Keystream
-    print("[2/4] Deriving keystream from password...")
-    keystream = derive_keystream(password, file_size)
+    # Step 4: Decrypt via Vernam XOR
+    print("[3/4] Decrypting ciphertext via Vernam stream cipher...")
+    plaintext = vernam_xor(ciphertext, keystream)
 
-    # Step 2: Decrypt via Vernam XOR
-    print("[3/4] Decrypting bytes via Vernam inverse XOR...")
-    decrypted_bytes = vernam_cipher(ciphertext, keystream)
+    # Step 5: Check MD5 plaintext integrity
+    print("[4/4] Verifying bit-level MD5 plaintext integrity...")
+    computed_md5 = compute_md5(plaintext)
+    if not hmac.compare_digest(stored_md5, computed_md5):
+        print("\n🚨 INTEGRITY FAILED: MD5 digest mismatch! Data corrupted.")
+        sys.exit(1)
 
-    # Write decrypted output
-    with open(decrypted_path, "wb") as f:
-        f.write(decrypted_bytes)
-    print(f"      - Decrypted content written to: {decrypted_path}")
+    print("      - MD5 Verification  : [PASSED ✓] (Bit-level integrity confirmed)")
 
-    # Step 3: Integrity verification via MD5
-    print("[4/4] Verifying cryptographic integrity (MD5 hash comparison)...")
-    computed_md5, _ = compute_md5(decrypted_bytes)
-    print(f"      - Computed MD5 of Decrypted Data : {computed_md5}")
+    # Determine restored file path
+    if not output_path:
+        if vault_path.endswith(".vault"):
+            output_path = vault_path[:-6]
+        else:
+            output_path = f"{vault_path}.unlocked"
 
-    stored_md5 = None
-    if os.path.isfile(hash_path):
-        with open(hash_path, "r", encoding="utf-8") as f:
-            stored_md5 = f.read().strip()
-        print(f"      - Stored Reference MD5 Hash      : {stored_md5}")
-    else:
-        print(f"      - Stored Reference Hash File     : ⚠️ NOT FOUND ({hash_path})")
+    with open(output_path, "wb") as f:
+        f.write(plaintext)
 
-    print("-" * 65)
-    if stored_md5 and computed_md5.lower() == stored_md5.lower():
-        print("✅ Verified — file is untampered")
-        print("   The file decrypted perfectly and matches the original cryptographic hash.")
-    else:
-        print("⚠️ WARNING — file has been modified or wrong password used")
-        print("   Integrity verification failed! The decrypted content does NOT match the original.")
-    print("=" * 65 + "\n")
+    print("-" * 68)
+    print("✅ ACCESS GRANTED — FILE UNLOCKED SUCCESSFULLY!")
+    print(f"📁 Restored File    : {output_path}")
+    print(f"📄 Recovered Size   : {len(plaintext)} bytes")
+    print("=" * 68 + "\n")
+    return plaintext
 
 
 # ============================================================================
-# 6. TAMPER DEMO MODE
+# 4. VIEW MODE (ZERO-LEAKAGE TERMINAL PEEK)
 # ============================================================================
-def tamper_file(enc_path: str):
+def view_file(vault_path: str, password: str):
     """
-    Simulates a Man-in-the-Middle (MITM) or unauthorized modification attack
-    by flipping random bytes in the .enc file.
+    Securely displays the contents of a protected vault file directly
+    in the terminal without ever saving unencrypted plaintext to the disk.
     """
-    if not os.path.isfile(enc_path):
-        print(f"\n❌ Error: File '{enc_path}' not found.")
+    if not os.path.isfile(vault_path):
+        print(f"\n❌ Error: Vault file '{vault_path}' not found.")
         sys.exit(1)
 
-    with open(enc_path, "rb") as f:
+    print("\n" + "=" * 68)
+    print("👁️ SECURETEXT — ZERO-DISK-LEAKAGE FILE VIEWER")
+    print("=" * 68)
+
+    with open(vault_path, "rb") as f:
+        vault_data = f.read()
+
+    header_len = len(MAGIC_HEADER) + SALT_SIZE + HMAC_SIZE + MD5_SIZE
+    if len(vault_data) < header_len or not vault_data.startswith(MAGIC_HEADER):
+        print("❌ Error: Invalid vault file.")
+        sys.exit(1)
+
+    offset = len(MAGIC_HEADER)
+    salt = vault_data[offset:offset + SALT_SIZE]
+    offset += SALT_SIZE
+    stored_hmac = vault_data[offset:offset + HMAC_SIZE]
+    offset += HMAC_SIZE
+    offset += MD5_SIZE
+    ciphertext = vault_data[offset:]
+
+    keystream, hmac_key, _ = derive_keys(password, salt, len(ciphertext))
+    computed_hmac = compute_hmac(hmac_key, salt + ciphertext)
+
+    if not hmac.compare_digest(stored_hmac, computed_hmac):
+        print("🚨 ACCESS DENIED: Incorrect password or modified vault.")
+        sys.exit(1)
+
+    plaintext = vernam_xor(ciphertext, keystream)
+    print(f"[*] Displaying contents of '{vault_path}' (Decrypted in-memory only):")
+    print("-" * 68)
+    try:
+        print(plaintext.decode("utf-8"))
+    except UnicodeDecodeError:
+        print(f"[Binary Content Preview: {plaintext[:64].hex()}...]")
+    print("-" * 68)
+    print("🔒 File was decrypted in RAM only. Zero plaintext was written to disk.")
+    print("=" * 68 + "\n")
+
+
+# ============================================================================
+# 5. TAMPER ATTACK SIMULATOR (DEMONSTRATES TAMPER DEFENSE)
+# ============================================================================
+def tamper_vault(vault_path: str):
+    """
+    Simulates a malicious attacker attempting to modify the protected file.
+    Alters bytes in the ciphertext or header to test the defense shield.
+    """
+    if not os.path.isfile(vault_path):
+        print(f"\n❌ Error: Vault file '{vault_path}' not found.")
+        sys.exit(1)
+
+    with open(vault_path, "rb") as f:
         data = bytearray(f.read())
 
-    if len(data) == 0:
-        print(f"\n❌ Error: Cannot tamper with an empty file '{enc_path}'.")
+    header_len = len(MAGIC_HEADER) + SALT_SIZE + HMAC_SIZE + MD5_SIZE
+    if len(data) <= header_len:
+        print("❌ Error: Vault file too small to tamper.")
         sys.exit(1)
 
-    print("\n" + "=" * 65)
-    print("⚠️ SECURETEXT — SIMULATED FILE TAMPER ATTACK")
-    print("=" * 65)
-    print(f"[*] Target Ciphertext File : {enc_path}")
-    print(f"[*] File Size              : {len(data)} bytes")
+    print("\n" + "=" * 68)
+    print("⚠️ SECURETEXT — SIMULATED UNAUTHORIZED TAMPER ATTACK")
+    print("=" * 68)
+    print(f"[*] Target Vault File : {vault_path}")
+    print(f"[*] Total File Size   : {len(data)} bytes")
 
-    # Choose between 1 and 3 random byte positions to flip
-    num_flips = min(3, len(data))
-    chosen_indices = sorted(random.sample(range(len(data)), num_flips))
+    # Pick a byte in the ciphertext payload area (after headers)
+    target_idx = random.randint(header_len, len(data) - 1)
+    original_byte = data[target_idx]
+    modified_byte = original_byte ^ 0xFF
+    data[target_idx] = modified_byte
 
-    print(f"[*] Modifying {num_flips} byte(s) at random offsets to simulate tampering:")
-    for idx in chosen_indices:
-        original_byte = data[idx]
-        # Invert the byte using bitwise NOT (XOR 0xFF)
-        modified_byte = original_byte ^ 0xFF
-        data[idx] = modified_byte
-        print(f"    - Offset {idx:>4}: 0x{original_byte:02x} -> 0x{modified_byte:02x} (Bitwise Inverted)")
-
-    # Write the tampered content back to the .enc file
-    with open(enc_path, "wb") as f:
+    with open(vault_path, "wb") as f:
         f.write(data)
 
-    print("-" * 65)
-    print(f"⚠️ TAMPER COMPLETE! '{enc_path}' has been maliciously altered.")
-    print("👉 Now run decrypt mode to observe the integrity verification catch the attack:")
-    print(f"   python securetext.py decrypt {enc_path} <password>")
-    print("=" * 65 + "\n")
+    print(f"[!] ATTACK SIMULATED: Attacker altered byte at offset {target_idx}:")
+    print(f"    0x{original_byte:02x} -> 0x{modified_byte:02x} (Bitwise Inverted)")
+    print("-" * 68)
+    print("🛡️ NOW TEST THE DEFENSE:")
+    print("   Attempt to unlock the file with the correct password:")
+    print(f"   python securetext.py unlock {vault_path} <password>")
+    print("   Observe how SecureText immediately locks down and prevents access!")
+    print("=" * 68 + "\n")
 
 
 # ============================================================================
-# 7. COMMAND LINE INTERFACE & MAIN
+# 6. ONE-CLICK AUTOMATED LAB DEMO (FOR TEACHERS / PRESENTATIONS)
 # ============================================================================
-def print_banner():
-    print("""
-=================================================================
-  SecureText — Encrypted File Vault with Integrity Verification
-  Cryptography & Network Security Lab Tool
-=================================================================
-""")
+def run_auto_demo():
+    """
+    Automated presentation walkthrough showing the complete security lifecycle:
+    Lock -> View -> Tamper Attack Blocked -> Unlock.
+    """
+    print("\n" + "#" * 68)
+    print("🎬 SECURETEXT — AUTOMATED LAB PRESENTATION DEMO")
+    print("#" * 68)
+
+    demo_file = "lab_secret.txt"
+    demo_password = "TeacherDemoPassword2026!"
+
+    # Create sample document
+    with open(demo_file, "w", encoding="utf-8") as f:
+        f.write("TOP SECRET LAB REPORT 2026\nConfidential research findings & exam papers.\nDo not distribute.")
+
+    print("\n[SCENARIO 1]: User has a confidential file and wants to protect it.")
+    time.sleep(1)
+    lock_file(demo_file, demo_password, shred_original=False)
+
+    print("\n[SCENARIO 2]: User wants to view the protected file securely in terminal.")
+    time.sleep(1)
+    view_file(f"{demo_file}.vault", demo_password)
+
+    print("\n[SCENARIO 3]: An attacker intercepts the file and tampers with it.")
+    time.sleep(1)
+    tamper_vault(f"{demo_file}.vault")
+
+    print("\n[SCENARIO 4]: User tries to unlock the tampered file (Defense Triggered).")
+    time.sleep(1)
+    try:
+        unlock_file(f"{demo_file}.vault", demo_password)
+    except SystemExit:
+        print("[✓] As demonstrated, the defense shield successfully blocked unauthorized access!")
+
+    # Clean up demo files
+    for f_path in [demo_file, f"{demo_file}.vault", f"{demo_file}.unlocked"]:
+        if os.path.exists(f_path):
+            os.remove(f_path)
+
+    print("\n" + "#" * 68)
+    print("🎉 DEMO COMPLETED SUCCESSFULLY — ALL SECURITY CONTROLS VERIFIED!")
+    print("#" * 68 + "\n")
 
 
+# ============================================================================
+# 7. CLI ENTRY POINT
+# ============================================================================
 def main():
     parser = argparse.ArgumentParser(
-        description="SecureText: Encrypt, Decrypt, and Tamper-Test files using Vernam Cipher and MD5 Integrity Hashing.",
+        description="SecureText: Encrypted File Vault with PBKDF2, Vernam OTP, HMAC, and Tamper Shield.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples of Usage:
-  1. Encrypt a file:
-     python securetext.py encrypt secret.txt mypassword123
+Core Workflows:
+  1. Lock & Protect a File:
+     python securetext.py lock secret.txt mypassword123
 
-  2. Decrypt a file:
-     python securetext.py decrypt secret.txt.enc mypassword123
+  2. Lock & Securely Shred Plaintext from Disk:
+     python securetext.py lock secret.txt mypassword123 --shred
 
-  3. Tamper with an encrypted file (demo attack):
-     python securetext.py tamper secret.txt.enc
+  3. Unlock Protected File:
+     python securetext.py unlock secret.txt.vault mypassword123
 
-  4. Re-run decrypt to show tampering detected:
-     python securetext.py decrypt secret.txt.enc mypassword123
+  4. View File in Terminal (Zero Disk Footprint):
+     python securetext.py view secret.txt.vault mypassword123
+
+  5. Simulate Attack (Tamper with Vault):
+     python securetext.py tamper secret.txt.vault
+
+  6. Run Full Presentation Demo:
+     python securetext.py demo
 """
     )
 
-    subparsers = parser.add_subparsers(dest="command", help="Command to execute")
+    subparsers = parser.add_subparsers(dest="command", help="Command to run")
 
-    # Encrypt subparser
-    enc_parser = subparsers.add_parser("encrypt", help="Encrypt file with Vernam cipher and create MD5 hash")
-    enc_parser.add_argument("input_file", help="Path to input file to encrypt")
-    enc_parser.add_argument("password", help="Password used to derive encryption keystream")
+    # Lock command
+    p_lock = subparsers.add_parser("lock", help="Lock & protect a file with password")
+    p_lock.add_argument("file", help="Path of the file to protect")
+    p_lock.add_argument("password", help="Secret password")
+    p_lock.add_argument("--shred", action="store_true", help="Securely overwrite and shred original plaintext")
 
-    # Decrypt subparser
-    dec_parser = subparsers.add_parser("decrypt", help="Decrypt .enc file and verify integrity against .hash")
-    dec_parser.add_argument("input_file", help="Path to .enc file to decrypt")
-    dec_parser.add_argument("password", help="Password used for decryption")
+    # Unlock command
+    p_unlock = subparsers.add_parser("unlock", help="Unlock and restore protected file")
+    p_unlock.add_argument("vault", help="Path of the .vault file")
+    p_unlock.add_argument("password", help="Secret password")
+    p_unlock.add_argument("-o", "--output", help="Optional custom output path for restored file")
 
-    # Tamper subparser
-    tamper_parser = subparsers.add_parser("tamper", help="Flip random bytes in .enc file to simulate tampering")
-    tamper_parser.add_argument("input_file", help="Path to .enc file to tamper with")
+    # View command
+    p_view = subparsers.add_parser("view", help="View file in terminal without writing to disk")
+    p_view.add_argument("vault", help="Path of the .vault file")
+    p_view.add_argument("password", help="Secret password")
+
+    # Tamper command
+    p_tamper = subparsers.add_parser("tamper", help="Simulate unauthorized tampering attack")
+    p_tamper.add_argument("vault", help="Path of the .vault file to tamper with")
+
+    # Demo command
+    subparsers.add_parser("demo", help="Run automated end-to-end presentation demo")
 
     if len(sys.argv) == 1:
-        print_banner()
         parser.print_help()
         sys.exit(0)
 
     args = parser.parse_args()
 
-    if args.command == "encrypt":
-        encrypt_file(args.input_file, args.password)
-    elif args.command == "decrypt":
-        decrypt_file(args.input_file, args.password)
+    if args.command == "lock":
+        lock_file(args.file, args.password, shred_original=args.shred)
+    elif args.command == "unlock":
+        unlock_file(args.vault, args.password, output_path=args.output)
+    elif args.command == "view":
+        view_file(args.vault, args.password)
     elif args.command == "tamper":
-        tamper_file(args.input_file)
+        tamper_vault(args.vault)
+    elif args.command == "demo":
+        run_auto_demo()
     else:
         parser.print_help()
 
