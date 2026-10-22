@@ -1,6 +1,6 @@
-Cryptography & Network Security Lab Project
+Cryptography & Network Security Mini project
 Topic: Text File Encrypter/Decrypter CLI Tool
-Author: Khushboo Tiwari
+Author: Khushboo Tiwari and Rishika Singh
 
 This confidential document is protected using a hybrid cipher:
 1. Vernam (One-Time Pad) XOR substitution for perfect secrecy.
