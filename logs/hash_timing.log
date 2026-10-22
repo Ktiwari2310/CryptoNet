@@ -1,0 +1,13 @@
+==========================================================================================
+CryptoNet MD5 Hashing Performance & Integrity Benchmark Log
+Columns: Timestamp | Context | Size (Bytes) | Digest Size (Bits) | Time (ns) | Time (us) | Time (ms)
+==========================================================================================
+[2026-10-22 18:38:44] | benchmark    |         16 B | 128 bits (16B) |       2470 ns |     2.47 us |   0.0025 ms
+[2026-10-22 18:38:44] | benchmark    |         64 B | 128 bits (16B) |       2756 ns |     2.76 us |   0.0028 ms
+[2026-10-22 18:38:44] | benchmark    |        256 B | 128 bits (16B) |       3093 ns |     3.09 us |   0.0031 ms
+[2026-10-22 18:38:44] | benchmark    |       1024 B | 128 bits (16B) |       5669 ns |     5.67 us |   0.0057 ms
+[2026-10-22 18:38:44] | benchmark    |       4096 B | 128 bits (16B) |      15772 ns |    15.77 us |   0.0158 ms
+[2026-10-22 18:38:44] | benchmark    |      16384 B | 128 bits (16B) |      49892 ns |    49.89 us |   0.0499 ms
+[2026-10-22 18:38:44] | benchmark    |      65536 B | 128 bits (16B) |     139804 ns |   139.80 us |   0.1398 ms
+[2026-10-22 18:38:44] | benchmark    |     262144 B | 128 bits (16B) |     514436 ns |   514.44 us |   0.5144 ms
+[2026-10-22 18:38:44] | benchmark    |    1048576 B | 128 bits (16B) |    2280465 ns |  2280.47 us |   2.2805 ms
